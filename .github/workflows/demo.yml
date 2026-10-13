@@ -11,47 +11,82 @@ permissions:
 jobs:
   validate-demo:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - name: Check out Test branch
         uses: actions/checkout@v4
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '22'
+
       - name: Install packages
         run: npm install --no-audit --no-fund
+
       - name: Run unit tests
         run: npm test
+
       - name: Build application
         run: npm run build
+
       - name: Install Chromium for browser capture
         run: npx playwright install --with-deps chromium
+
       - name: Start development server and verify readiness
         run: |
-          npm run dev > /tmp/disposable-screens-server.log 2>&1 &
+          mkdir -p demo
+          nohup npm run dev > /tmp/disposable-screens-server.log 2>&1 < /dev/null &
+          echo "Server process: $!"
           for i in $(seq 1 60); do
             if curl --fail --silent http://127.0.0.1:5173/ >/dev/null && curl --fail --silent http://127.0.0.1:8787/api/status >/dev/null; then
-              echo "Both services ready"
+              echo "Frontend and API ready"
+              curl --fail --silent http://127.0.0.1:8787/api/status
               exit 0
             fi
             sleep 2
           done
+          echo "Service readiness failed. Server log:"
           cat /tmp/disposable-screens-server.log
           exit 1
-      - name: Verify UI interactions and record demo
+
+      - name: Verify browser interactions and record demo
         run: npm run record:demo
+
       - name: Convert browser capture into shareable MP4
+        if: ${{ success() || failure() }}
         run: |
-          ffmpeg -y -i demo/disposable-screens-demo.webm -c:v libx264 -pix_fmt yuv420p -crf 22 -movflags +faststart demo/disposable-screens-demo.mp4
-      - name: Upload LinkedIn demo and screenshots
+          if test -s demo/disposable-screens-demo.webm; then
+            ffmpeg -y -i demo/disposable-screens-demo.webm -c:v libx264 -pix_fmt yuv420p -crf 22 -movflags +faststart demo/disposable-screens-demo.mp4
+          else
+            echo "No WebM recording to convert (an earlier step may have failed)."
+          fi
+
+      - name: Save diagnostic logs
+        if: always()
+        run: |
+          mkdir -p demo
+          if test -f /tmp/disposable-screens-server.log; then
+            cp /tmp/disposable-screens-server.log demo/server.log
+            echo "Last 100 server log lines:"
+            tail -n 100 demo/server.log
+          fi
+          if test -f demo/browser-errors.log; then
+            echo "Browser diagnostics:"
+            cat demo/browser-errors.log
+          fi
+
+      - name: Upload video, screenshots, and diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: disposable-screens-linkedin-demo
           path: |
             demo/*.mp4
+            demo/*.webm
             demo/*.png
-            demo/verified-schema.json
+            demo/*.json
+            demo/*.log
+            demo/*.txt
           retention-days: 30
-          if-no-files-found: ignore
+          if-no-files-found: warn
