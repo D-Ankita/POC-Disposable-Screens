@@ -53,14 +53,33 @@ jobs:
       - name: Verify browser interactions and record demo
         run: npm run record:demo
 
-      - name: Convert browser capture into shareable MP4
-        if: ${{ success() || failure() }}
+      - name: Ensure FFmpeg is available
         run: |
-          if test -s demo/disposable-screens-demo.webm; then
-            ffmpeg -y -i demo/disposable-screens-demo.webm -c:v libx264 -pix_fmt yuv420p -crf 22 -movflags +faststart demo/disposable-screens-demo.mp4
-          else
-            echo "No WebM recording to convert (an earlier step may have failed)."
+          if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1; then
+            echo "Installing FFmpeg for browser-video conversion..."
+            sudo apt-get update -qq
+            sudo apt-get install -y ffmpeg
           fi
+          ffmpeg -hide_banner -version | head -n 1
+          ffprobe -hide_banner -version | head -n 1
+
+      - name: Convert recording into verified MP4
+        run: |
+          set -Eeuo pipefail
+          echo "Recorded files:"
+          ls -lah demo/
+          test -s demo/disposable-screens-demo.webm || { echo "::error::Playwright WebM recording is missing or empty"; exit 1; }
+          echo "WebM input details:"
+          ffprobe -v error -show_entries format=duration,size -of default=noprint_wrappers=1 demo/disposable-screens-demo.webm
+          echo "Encoding H.264 MP4..."
+          if ! ffmpeg -hide_banner -nostdin -y -i demo/disposable-screens-demo.webm -an -c:v libx264 -preset veryfast -crf 23 -pix_fmt yuv420p -movflags +faststart demo/disposable-screens-demo.mp4 2>&1 | tee demo/ffmpeg.log; then
+            echo "::warning::H.264 encoding failed; retrying with MPEG-4 video encoding."
+            ffmpeg -hide_banner -nostdin -y -i demo/disposable-screens-demo.webm -an -c:v mpeg4 -q:v 4 -pix_fmt yuv420p -movflags +faststart demo/disposable-screens-demo.mp4 2>&1 | tee -a demo/ffmpeg.log
+          fi
+          test -s demo/disposable-screens-demo.mp4 || { echo "::error::MP4 conversion produced no output"; exit 1; }
+          ffprobe -v error -show_entries stream=codec_name,width,height -show_entries format=duration,size -of default=noprint_wrappers=1 demo/disposable-screens-demo.mp4
+          ls -lh demo/disposable-screens-demo.mp4
+          echo "MP4 generated successfully."
 
       - name: Save diagnostic logs
         if: always()
