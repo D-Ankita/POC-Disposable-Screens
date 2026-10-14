@@ -60,8 +60,8 @@ jobs:
             sudo apt-get update -qq
             sudo apt-get install -y ffmpeg
           fi
-          ffmpeg -hide_banner -version | head -n 1
-          ffprobe -hide_banner -version | head -n 1
+          ffmpeg -hide_banner -version | sed -n '1p'
+          ffprobe -hide_banner -version | sed -n '1p'
 
       - name: Convert recording into verified MP4
         run: |
